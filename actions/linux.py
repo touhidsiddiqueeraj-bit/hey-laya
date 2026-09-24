@@ -16,6 +16,8 @@ def _run(cmd: list[str], timeout: float = 5.0) -> bool:
 def open_app(app: str) -> bool:
     if not app:
         return False
+    if app == "browser":
+        return _open_browser()
     # Try desktop file / command name directly
     if _run(["xdg-open", app]) or _run(["gtk-launch", app]):
         return True
@@ -27,6 +29,28 @@ def open_app(app: str) -> bool:
         "nautilus": ["nautilus", "files"],
     }
     for name in aliases.get(app, [app]):
+        if shutil.which(name):
+            return _run([name])
+    return False
+
+
+def _open_browser() -> bool:
+    """'open browser' → system default web browser, else first available."""
+    candidates: list[str] = []
+    try:
+        r = subprocess.run(
+            ["xdg-settings", "get", "default-web-browser"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        desktop = r.stdout.strip().removesuffix(".desktop")
+        if desktop:
+            candidates.append(desktop)
+    except Exception:
+        pass
+    candidates += ["firefox", "google-chrome", "chromium", "brave-browser", "microsoft-edge"]
+    for name in candidates:
         if shutil.which(name):
             return _run([name])
     return False

@@ -170,7 +170,9 @@ def test_audio():
 
     check("wake hey-laya", wake_hit("Hey Laya, pause the music"))
     check("wake ok-laya", wake_hit("ok laya set a timer"))
-    check("wake hitranscript", wake_hit("heilaya volume up"))
+    check("wake heilaya", wake_hit("heilaya volume up"))
+    check("wake whisper 'Hey, Leia'", wake_hit("Hey, Leia. Open the browser."))
+    check("wake 'Hey Leia,'", wake_hit("Hey Leia, open the browser"))
     check("wake negative", not wake_hit("hello there"))
     check("wake None-safe", not wake_hit(None))
     check("wake strip", WAKE.sub("", "hey laya volume up").strip(" ,.!?")

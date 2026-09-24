@@ -31,13 +31,60 @@ class Assistant:
     def __init__(self, gate: float, stt_model: str, use_ui: bool = True):
         self.gate = gate
         self.stt_model = stt_model
-        self.ui = StatusUI() if use_ui else None
+        self.ui = (
+            StatusUI(on_ptt_start=self.manual_ptt_start, on_ptt_end=self.manual_ptt_end)
+            if use_ui
+            else None
+        )
         self.llm = LLM()
         self.timers = TimerBank()
         self.speaker = tts_mod.Speaker(play_wav)
         self._stop = threading.Event()
         self._router = None
         self._warm_done = threading.Event()
+        self._manual_rec = None
+        self._wake_prev = ""
+
+    # --- manual PTT: UI button / Space — works on Wayland ------------------
+    def manual_ptt_start(self):
+        if self._manual_rec:
+            return
+        from audio import Recorder
+
+        self._manual_rec = Recorder()
+        self._manual_rec.start()
+        if self.ui:
+            self.ui.set_state("listen", "Recording — release to send")
+
+    def manual_ptt_end(self):
+        rec, self._manual_rec = self._manual_rec, None
+        if not rec:
+            return
+        wav = rec.stop()
+        if self.ui:
+            self.ui.set_state("exec", "Transcribing…")
+        threading.Thread(target=self._manual_finish, args=(wav,), daemon=True).start()
+
+    def _manual_finish(self, wav):
+        try:
+            from audio import rms
+            level = rms(wav) if wav else 0.0
+            text = transcribe(wav, self.stt_model) if wav else ""
+            print(f"[button] level={level:.3f} heard={text!r}", flush=True)
+            if not text:
+                if self.ui:
+                    self.ui.set_state(
+                        "ready",
+                        "Heard nothing — hold longer, speak loudly, retry"
+                        if level < 0.012
+                        else "Mic has sound but no speech found — retry",
+                    )
+                return
+            self.speak(self.handle_text(text))
+        except Exception as e:
+            print(f"[button] error: {e!r}", flush=True)
+            if self.ui:
+                self.ui.set_state("error", f"{e}"[:60])
 
     # --- lifecycle ---------------------------------------------------------
     def start(self):
@@ -86,12 +133,10 @@ class Assistant:
         if self.ui:
             self.ui.set_state("exec", text[:60])
 
-        # Wait briefly for Laya if still loading
+        # Wait briefly for Laya if still loading (no ui.tick here — may run off-main-thread)
         t0 = time.time()
         while self._router is None and time.time() - t0 < 30:
             time.sleep(0.2)
-            if self.ui:
-                self.ui.tick()
 
         spoken = ""
         if self._router is not None:
@@ -139,6 +184,13 @@ class Assistant:
     # --- voice loops -------------------------------------------------------
     def run_ptt(self, ptt_key: str = "alt_r"):
         """Hold PTT key → record → transcribe → handle."""
+        if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+            print(
+                "[ptt] Wayland session — global hotkeys are unavailable; "
+                "use the Hold-to-talk button or Space in the Laya window",
+                flush=True,
+            )
+            # keep going: pynput may still see keys when the Laya window is focused
         try:
             from pynput import keyboard
         except Exception as e:
@@ -195,11 +247,26 @@ class Assistant:
                 time.sleep(0.1)
             wav = rec.stop()
             if not wav:
+                print("[wake] no audio captured (mic silent?)")
                 time.sleep(0.2)
                 continue
-            text = transcribe(wav, self.stt_model)
-            if not wake_hit(text):
+            from audio import rms
+
+            level = rms(wav)
+            if level < 0.012:
+                # silence/ambient: whisper invents text from noise — skip it
+                print(f"[wake] level={level:.3f} (quiet, skip STT)", flush=True)
                 continue
+            text = transcribe(wav, self.stt_model)
+            # carry the previous buffer so "hey laya" split across a boundary still hits
+            combined = f"{self._wake_prev} {text}".strip()
+            self._wake_prev = text[-80:]
+            if self.ui:
+                self.ui.set_state("ready", f"heard: {text or '(speech)'}"[:60])
+            print(f"[wake] level={level:.3f} heard={text!r}", flush=True)
+            if not wake_hit(combined):
+                continue
+            text = combined
             # Command may be in same buffer after wake phrase
             from audio import WAKE
 
@@ -246,14 +313,50 @@ def main():
     ap.add_argument("--wake-only", action="store_true")
     ap.add_argument("--ptt-only", action="store_true")
     ap.add_argument("--demo-tts", action="store_true", help="Warm TTS cache and exit")
+    ap.add_argument(
+        "--mic-test",
+        action="store_true",
+        help="Record 3s, print mic level + transcription, exit (diagnose silent wake)",
+    )
     args = ap.parse_args()
 
-    use_ui = not args.no_ui and not args.text and not args.fixture and not args.demo_tts
+    use_ui = (
+        not args.no_ui
+        and not args.text
+        and not args.fixture
+        and not args.demo_tts
+        and not args.mic_test
+    )
     assistant = Assistant(gate=args.gate, stt_model=args.stt, use_ui=use_ui)
 
     if args.demo_tts:
         n = tts_mod.warm()
         print(f"warmed {n} phrases → {tts_mod.CACHE}")
+        return 0
+
+    if args.mic_test:
+        import sounddevice as sd
+
+        from audio import Recorder, rms, transcribe
+
+        devs = sd.query_devices()
+        default_in = sd.default.device[0]
+        print(f"default input [{default_in}]: {devs[default_in]['name']}  "
+              f"max_in={devs[default_in]['max_input_channels']}")
+        print("speaking in 1s — record 3s…")
+        r = Recorder()
+        r.start()
+        time.sleep(3.0)
+        wav = r.stop()
+        if not wav or not wav.exists() or wav.stat().st_size < 1024:
+            print("FAIL: no audio frames captured — mic device wrong or busy")
+            return 1
+        level = rms(wav)
+        text = transcribe(wav, args.stt)
+        print(f"level={level:.3f}  transcribed={text!r}")
+        print("OK: mic works" if level > 0.001 else "FAIL: captured silence (level≈0)")
+        if level > 0.001 and not text:
+            print("note: level OK but no text — say something clearly, or try --stt tiny")
         return 0
 
     if args.fixture:

@@ -65,8 +65,8 @@ Name=Hey Laya
 Comment=Local voice assistant (Laya decision layer)
 Exec=$BIN_DIR/hey-laya
 Terminal=false
-Categories=Utility;Audio;
-Keywords=voice;assistant;laya;
+Categories=AudioVideo;Utility;
+Keywords=voice;assistant;laya;microphone;
 EOF
 chmod 644 "$APP_DIR/hey-laya.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true

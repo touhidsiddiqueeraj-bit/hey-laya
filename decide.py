@@ -24,6 +24,7 @@ APPS = {
     "files": "nautilus",
     "calculator": "gnome-calculator",
     "settings": "gnome-control-center",
+    "browser": "browser",  # resolved to default web browser in actions.linux
 }
 
 QUESTIONS = {
@@ -186,6 +187,32 @@ def _app_hint(transcript: str) -> str | None:
     return None
 
 
+def _minutes_from(transcript: str) -> float | None:
+    """Parse timer minutes straight from the transcript (Laya's buckets are unreliable)."""
+    import re
+
+    t = transcript.lower()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b", t)
+    if m:
+        return float(m.group(1))
+    words = {
+        "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+        "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+        "forty-five": 45, "sixty": 60,
+    }
+    if re.search(r"\b(?:half\s+an?\s+hour|half\s+hour)\b", t):
+        return 30.0
+    if re.search(r"\ban?\s+hour\b|\bhours?\b", t):
+        return 60.0
+    m = re.search(
+        r"\b(" + "|".join(words) + r")\s+(?:minutes?|mins?)\b", t,
+    )
+    if m and words[m.group(1)]:
+        return float(words[m.group(1)])
+    return None
+
+
 def decide(router: Router, transcript: str, gate: float = GATE) -> dict:
     """Run Laya → returns {answers, task, confidence, actions, needs_llm}."""
     answers: dict = {}
@@ -214,6 +241,11 @@ def decide(router: Router, transcript: str, gate: float = GATE) -> dict:
         answers.setdefault("app_action", {"choice": "open", "answer_confidence": 0.9})
 
     actions = split_actions(answers, task, conf, gate)
+    # Laya's timer_minutes buckets often pick the wrong one — trust the transcript
+    if actions and actions[0].get("action") == "timer":
+        mins = _minutes_from(transcript)
+        if mins:
+            actions[0]["minutes"] = mins
     needs_llm = conf < gate or task == "none" or not actions
     return {
         "answers": answers,

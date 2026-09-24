@@ -69,10 +69,13 @@ except Exception as e:
         r = subprocess.run(
             [str(py), "-c", script],
             capture_output=True,
-            timeout=60,
+            timeout=180,  # cold kokoro load can exceed 60s while the router loads
         )
+        if r.returncode != 0:
+            print(f"[tts] kokoro rc={r.returncode}: {r.stderr.decode()[:200]}", flush=True)
         return r.returncode == 0 and _wav_ok(out)
-    except Exception:
+    except Exception as e:
+        print(f"[tts] kokoro failed: {e!r}", flush=True)
         return False
 
 
@@ -149,7 +152,8 @@ class Speaker(threading.Thread):
             path = synth(text)
             if path:
                 self._play(str(path))
-            # else: fail loud but non-blocking — skip silent espeak fallback
+            else:
+                print(f"[tts] no audio for {text!r}", flush=True)
 
 
 if __name__ == "__main__":

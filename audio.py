@@ -11,9 +11,10 @@ from pathlib import Path
 import numpy as np
 
 SAMPLE_RATE = 16000
-# "Hey Laya" fuzzy wake variants
+# Fuzzy wake: whisper often renders "Laya" as Leia/Lia/Layla, and adds commas.
+# "hey|hi|hei|ok|okay|yo" + optional comma/space + name; fused forms (heilaya) match too.
 WAKE = re.compile(
-    r"\b(hey\s*laya|hi\s*laya|ok\s*laya|heilaya|hey\s*layer|a\s*laya)\b",
+    r"\b(?:hey|hi|hei|ok|okay|yo)\s*[,:]?\s*(?:laya|layla|leia|lia|liya|liah|lea)\b",
     re.IGNORECASE,
 )
 
@@ -63,6 +64,7 @@ class Recorder:
                     time.sleep(0.05)
 
             if not frames:
+                print("[mic] no audio frames captured (device busy or muted?)", flush=True)
                 return
             data = np.concatenate(frames, axis=0)
             with wave.open(str(self.path), "wb") as w:
@@ -70,20 +72,49 @@ class Recorder:
                 w.setsampwidth(2)
                 w.setframerate(self.sample_rate)
                 w.writeframes(data.tobytes())
-        except Exception:
+        except Exception as e:
             # Headless / no mic: leave empty path
+            print(f"[mic] record failed: {e!r}", flush=True)
             pass
 
 
+# Whisper model cache — reloading per utterance made every wake cycle ~10s.
+_MODELS: dict = {}
+
+
+def rms(wav_path: Path) -> float:
+    """Peak-normalized loudness 0..1 of a WAV — 'is the mic hearing me?'."""
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            raw = w.readframes(w.getnframes())
+        if not raw:
+            return 0.0
+        a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return float(np.abs(a).mean()) if len(a) else 0.0
+    except Exception:
+        return 0.0
+
+
 def transcribe(wav_path: Path, model_size: str = "base") -> str:
-    """faster-whisper → text ("" if model missing)."""
+    """faster-whisper → text ("" if model missing or audio empty)."""
+    p = Path(wav_path)
+    if not p.exists() or p.stat().st_size < 1024:
+        return ""  # mkstemp leaves a 0-byte file if the mic failed
     try:
         from faster_whisper import WhisperModel
 
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(str(wav_path), language="en")
+        if model_size not in _MODELS:
+            _MODELS[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
+        model = _MODELS[model_size]
+        segments, _ = model.transcribe(
+            str(p),
+            language="en",
+            condition_on_previous_text=False,  # stops silence-hallucination loops
+            beam_size=1,  # greedy: ~2x faster on CPU, wake needs no beam search
+        )
         return " ".join(s.text.strip() for s in segments).strip()
-    except Exception:
+    except Exception as e:
+        print(f"[stt] transcribe failed: {e!r}", flush=True)
         return ""
 
 
