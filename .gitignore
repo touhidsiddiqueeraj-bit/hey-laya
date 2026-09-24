@@ -1,0 +1,14 @@
+# runtime
+.venv/
+__pycache__/
+*.pyc
+cache/
+.env
+*.egg-info/
+dist/
+build/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store

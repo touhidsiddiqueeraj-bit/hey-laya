@@ -1,0 +1,11 @@
+# Routing fixture — one phrase per line (# comments). Used by --fixture.
+# Expect: action path or LLM fallback (never empty).
+Hey Laya pause the music
+volume up
+set volume to fifty percent
+open spotify
+switch to dark mode
+lock the computer
+set a timer for ten minutes
+what's the capital of France
+tell me a joke

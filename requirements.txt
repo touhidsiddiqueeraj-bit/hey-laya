@@ -1,0 +1,9 @@
+laya>=0.3.3
+faster-whisper>=1.0.0
+kokoro>=0.9.4
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pynput>=1.7.6
+numpy>=1.26.0
+requests>=2.31.0
+python-dotenv>=1.0.0
