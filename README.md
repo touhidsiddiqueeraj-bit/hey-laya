@@ -201,7 +201,9 @@ gracefully), and no LLM server.
 | `hey-laya: command not found` | `export PATH="$HOME/.local/bin:$PATH"` and reopen the shell |
 | No reply voice | Check `python tts.py`; set `KOKORO_PY` to a working Kokoro venv; need a default audio sink |
 | PTT does nothing | pynput needs X11/Wayland input access; try `--text` first to isolate |
-| Wake never fires | Mic default source? `python -c "import sounddevice as sd; print(sd.query_devices())"`; try `--stt tiny` |
+| Wake never fires | Run `hey-laya --mic-test` (records 3s, prints level + transcription); mic default source? `python -c "import sounddevice as sd; print(sd.query_devices())"`; try `--stt tiny` |
+| Right-Alt PTT never fires | Wayland blocks global hotkeys — use the **Hold-to-talk** button in the Laya window, or Space while it is focused |
+| App closes / does nothing after a few seconds | `journalctl --user -u 'app-hey-laya*' --since -1h` or `coredumpctl list hey-laya` (Tk UI must only be touched from the main thread) |
 | “can't answer” on questions | Expected with `LLM_AUTOSTART=0`. Start llama-server/Ollama or set `LLM_URL` |
 | OOM / machine freezes | Keep `LLM_AUTOSTART=0`; use `--stt tiny`; close other heavy apps |
 | LLM answers only reasoning | Handled automatically (`_pick_content` + retry); still empty ⇒ raise `max_tokens` in `llm.py` |
