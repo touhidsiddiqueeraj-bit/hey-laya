@@ -7,3 +7,7 @@ pynput>=1.7.6
 numpy>=1.26.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+# System tray icon (optional — the app runs fine without it)
+pystray>=0.19
+pillow>=10.0
+python-xlib>=0.33  # pystray backend on X11 without AppIndicator

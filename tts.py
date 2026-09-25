@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
+import time
 import wave
 from pathlib import Path
 
@@ -66,8 +68,12 @@ except Exception as e:
     sys.exit(1)
 """
     try:
+        cmd = [str(py), "-c", script]
+        if shutil.which("nice"):
+            # Don't let a cold model load freeze the orb: yield the CPU.
+            cmd = ["nice", "-n", "10"] + cmd
         r = subprocess.run(
-            [str(py), "-c", script],
+            cmd,
             capture_output=True,
             timeout=180,  # cold kokoro load can exceed 60s while the router loads
         )
@@ -138,6 +144,8 @@ class Speaker(threading.Thread):
         super().__init__(daemon=True)
         self.q: queue.Queue[str | None] = queue.Queue()
         self._play = play_fn
+        self.playing = threading.Event()  # set only while audio is on the speakers
+        self.last_end = 0.0  # monotonic time the last playback finished (echo guard)
         self.start()
 
     def say(self, text: str):
@@ -151,7 +159,12 @@ class Speaker(threading.Thread):
                 break
             path = synth(text)
             if path:
-                self._play(str(path))
+                self.playing.set()
+                try:
+                    self._play(str(path))
+                finally:
+                    self.playing.clear()
+                    self.last_end = time.monotonic()
             else:
                 print(f"[tts] no audio for {text!r}", flush=True)
 

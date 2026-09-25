@@ -1,4 +1,4 @@
-"""LLM backends: LLM_URL → polaris :8080 → thin llama-server spawn → ollama → canned."""
+"""LLM backends: LLM_URL → settings API key → polaris :8080 → thin llama-server spawn → ollama → canned."""
 from __future__ import annotations
 
 import os
@@ -93,15 +93,42 @@ def _healthy(url: str, timeout: float = 0.4) -> bool:
         return False
 
 
+def _settings_llm() -> dict:
+    """LLM-related keys from the settings file (empty when untouched)."""
+    try:
+        from settings import load_settings
+
+        s = load_settings()
+        return {
+            "provider": s.get("llm_provider", "local"),
+            "url": (s.get("llm_api_url") or "").strip(),
+            "key": (s.get("llm_api_key") or "").strip(),
+            "model": (s.get("llm_api_model") or "gpt-4o-mini").strip(),
+        }
+    except Exception:
+        return {}
+
+
 class LLM:
     def __init__(self):
         self.mode = "none"
         self.base: str | None = None  # OpenAI-style base incl. /v1
+        self.api_key = ""
+        self.api_model = ""
         self._proc: subprocess.Popen | None = None
         self._messages: list[dict] = []
 
+    def reset(self):
+        """Drop the cached backend so the next ask() re-resolves it."""
+        self.base = None
+        self.mode = "none"
+        self.api_key = ""
+        self.api_model = ""
+
     # --- lifecycle ---------------------------------------------------------
     def ensure(self) -> bool:
+        if self.mode == "api" and self.base:
+            return True  # key-based cloud endpoint: no local health probe
         if self.base and _healthy(self.base):
             return True
 
@@ -109,6 +136,19 @@ class LLM:
         env = os.environ.get("LLM_URL", "").strip()
         if env:
             self.base, self.mode = env, "env"
+            self.api_key, self.api_model = "", ""
+            return True
+
+        # 2. API key from the Settings page (OpenAI-compatible endpoint)
+        cfg = _settings_llm()
+        if cfg.get("provider") == "api" and cfg.get("key") and cfg.get("url"):
+            base = cfg["url"].rstrip("/")
+            if base.endswith("/chat/completions"):
+                base = base[: -len("/chat/completions")]
+            self.base = base
+            self.api_key = cfg["key"]
+            self.api_model = cfg["model"] or "gpt-4o-mini"
+            self.mode = "api"
             return True
 
         # 2. existing llama-server (Polaris :8080 or our :8081)
@@ -199,15 +239,24 @@ class LLM:
             return reply("cant_answer")
         self._messages.append({"role": "user", "content": user_text})
         self._messages = self._messages[-8:]
+        headers = (
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.mode == "api" and self.api_key
+            else None
+        )
+        body = {
+            "messages": [{"role": "system", "content": SYSTEM}] + self._messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.4,
+            "stream": False,
+        }
+        if self.mode == "api" and self.api_model:
+            body["model"] = self.api_model
         try:
             r = requests.post(
                 base.rstrip("/") + "/chat/completions",
-                json={
-                    "messages": [{"role": "system", "content": SYSTEM}] + self._messages,
-                    "max_tokens": max_tokens,
-                    "temperature": 0.4,
-                    "stream": False,
-                },
+                json=body,
+                headers=headers,
                 timeout=60,
             )
             r.raise_for_status()
@@ -215,14 +264,12 @@ class LLM:
             if not content:
                 # One retry with explicit no-think hint for reasoning models
                 self._messages.append({"role": "user", "content": "Answer directly without reasoning."})
+                body["messages"] = [{"role": "system", "content": SYSTEM}] + self._messages
+                body["temperature"] = 0.2
                 r = requests.post(
                     base.rstrip("/") + "/chat/completions",
-                    json={
-                        "messages": [{"role": "system", "content": SYSTEM}] + self._messages,
-                        "max_tokens": max_tokens,
-                        "temperature": 0.2,
-                        "stream": False,
-                    },
+                    json=body,
+                    headers=headers,
                     timeout=60,
                 )
                 r.raise_for_status()

@@ -20,6 +20,24 @@ REPLIES = {
     "app.open": "Opening it.",
     "app.focus": "Bringing it forward.",
     "app.fail": "Couldn't open that app.",
+    # web & search
+    "web.youtube": "Opening YouTube.",
+    "web.search_youtube": "Searching YouTube.",
+    "web.google": "Opening Google.",
+    "web.search": "Searching the web.",
+    "web.github": "Opening GitHub.",
+    "web.reddit": "Opening Reddit.",
+    "web.twitter": "Opening Twitter.",
+    "web.gmail": "Opening Gmail.",
+    "web.netflix": "Opening Netflix.",
+    "web.chatgpt": "Opening ChatGPT.",
+    "web.maps": "Opening Google Maps.",
+    "web.wikipedia": "Opening Wikipedia.",
+    # tools & utility
+    "screenshot.done": "Screenshot taken.",
+    "screenshot.fail": "Couldn't capture screenshot.",
+    "time.current": "Checking the time.",
+    "date.current": "Checking the date.",
     # display
     "brightness.up": "Brightness up.",
     "brightness.down": "Brightness down.",
@@ -31,7 +49,7 @@ REPLIES = {
     "system.shutdown": "Shutting down.",
     "system.reboot": "Rebooting.",
     "system.sleep": "Going to sleep.",
-    "system.confirm": "Are you sure? Say yes to confirm.",
+    "system.confirm": "Please confirm: say confirm shutdown to proceed.",
     # timer
     "timer.set": "Timer started.",
     "timer.done": "Time's up.",
@@ -42,8 +60,10 @@ REPLIES = {
     "error": "Something went wrong.",
     "listening": "Listening.",
     "thinking": "One moment.",
+    "cancel": "Cancelled.",
 }
 
 
 def reply(key: str) -> str:
     return REPLIES.get(key, REPLIES["error"])
+

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 
@@ -11,6 +12,7 @@ class Timer:
         self._on_done = on_done
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
+        self.ends_at = time.monotonic() + minutes * 60
 
     def start(self) -> "Timer":
         def run():
@@ -25,20 +27,37 @@ class Timer:
     def cancel(self):
         self._cancel.set()
 
+    def remaining(self) -> float:
+        """Seconds left (0 when fired/cancelled)."""
+        if self._cancel.is_set():
+            return 0.0
+        return max(0.0, self.ends_at - time.monotonic())
+
 
 class TimerBank:
     def __init__(self):
         self._timers: list[Timer] = []
+        self._lock = threading.Lock()
 
     def set(self, minutes: float, on_done: Callable[[], None]) -> Timer:
         t = Timer(minutes, on_done).start()
-        self._timers.append(t)
+        with self._lock:
+            self._timers.append(t)
         return t
 
     def cancel_all(self):
-        for t in self._timers:
+        with self._lock:
+            timers, self._timers = self._timers, []
+        for t in timers:
             t.cancel()
-        self._timers.clear()
+
+    def soonest_remaining(self) -> float | None:
+        """Seconds until the next active timer fires (None when no timer)."""
+        with self._lock:
+            self._timers = [t for t in self._timers if t.remaining() > 0]
+            if not self._timers:
+                return None
+            return min(t.remaining() for t in self._timers)
 
 
 def demo():

@@ -273,6 +273,12 @@ def test_actions_dispatch():
     # leave unmuted at 50%
     actions.run({"action": "volume_mute"})
     actions.run({"action": "volume_set", "pct": 50})
+    # new action types
+    check("time reply", "It's" in actions.run({"action": "time"}))
+    check("date reply", "Today is" in actions.run({"action": "date"}))
+    # shutdown without confirmation is safely blocked
+    check("shutdown safe block", "confirm" in actions.run({"action": "system", "cmd": "shutdown", "force": False}).lower())
+
 
 
 # ---------------------------------------------------------------- ui (headless-safe)
@@ -317,7 +323,7 @@ def test_pyflakes():
     section("pyflakes")
     files = [
         "main.py", "decide.py", "llm.py", "tts.py", "audio.py",
-        "replies.py", "timers.py", "ui.py", "test_all.py",
+        "replies.py", "timers.py", "ui.py", "settings.py", "test_all.py",
         "actions/__init__.py", "actions/linux.py", "actions/windows.py",
     ]
     try:

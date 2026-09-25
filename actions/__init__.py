@@ -21,6 +21,31 @@ def run(action: dict) -> str:
             return reply("app.fail")
         return reply("app.focus") if mode == "focus" else reply("app.open")
 
+    if kind == "url":
+        ok = plat.open_url(action.get("url", ""))
+        custom_reply = action.get("reply_key")
+        if custom_reply:
+            return reply(custom_reply) if ok else reply("error")
+        return reply("app.open") if ok else reply("error")
+
+    if kind == "search":
+        query = action.get("query", "")
+        engine = action.get("engine", "google")
+        ok = plat.search_web(query, engine=engine)
+        if engine == "youtube":
+            return reply("web.search_youtube") if ok else reply("error")
+        return reply("web.search") if ok else reply("error")
+
+    if kind == "screenshot":
+        ok = plat.take_screenshot()
+        return reply("screenshot.done") if ok else reply("screenshot.fail")
+
+    if kind == "time":
+        return plat.get_current_time()
+
+    if kind == "date":
+        return plat.get_current_date()
+
     if kind == "volume_step":
         ok = plat.volume_step(action.get("step", 10))
         return reply("volume.set") if ok else reply("volume.fail")
@@ -55,7 +80,11 @@ def run(action: dict) -> str:
 
     if kind == "system":
         cmd = action.get("cmd", "lock")
-        ok = plat.system(cmd)
+        force = bool(action.get("force", False))
+        if cmd in ("shutdown", "reboot") and not force:
+            # Protected by default
+            return reply("system.confirm")
+        ok = plat.system(cmd, force=force)
         return reply(f"system.{cmd}") if ok else reply("error")
 
     if kind == "timer":
@@ -63,3 +92,4 @@ def run(action: dict) -> str:
         return "timer.set"
 
     return reply("error")
+

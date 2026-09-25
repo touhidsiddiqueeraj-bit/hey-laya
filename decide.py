@@ -1,12 +1,10 @@
 """Laya decision layer — ported from hey-jev QUESTIONS + decide/split_actions."""
 from __future__ import annotations
 
+import re
 from laya import Router
 
 # Decision gate: answers below this confidence fall through to LLM.
-# Laya's calibrated `answer_confidence` is the documented gating number.
-# The English checkpoint reports ~0.55–0.99 on task; 0.50 keeps clear commands
-# while "none" for questions still falls through (those score >0.99 on none).
 GATE = 0.50
 
 # Score criteria index (0-based) → system percentages / minutes
@@ -22,9 +20,25 @@ APPS = {
     "vscode": "code",
     "terminal": "org.gnome.Terminal",
     "files": "nautilus",
-    "calculator": "gnome-calculator",
-    "settings": "gnome-control-center",
+    "calculator": "calculator",
+    "settings": "settings",
     "browser": "browser",  # resolved to default web browser in actions.linux
+    "discord": "discord",
+}
+
+# Web URL targets
+URLS = {
+    "youtube": ("https://www.youtube.com", "web.youtube"),
+    "google": ("https://www.google.com", "web.google"),
+    "github": ("https://www.github.com", "web.github"),
+    "reddit": ("https://www.reddit.com", "web.reddit"),
+    "twitter": ("https://www.twitter.com", "web.twitter"),
+    "x": ("https://www.x.com", "web.twitter"),
+    "gmail": ("https://mail.google.com", "web.gmail"),
+    "netflix": ("https://www.netflix.com", "web.netflix"),
+    "chatgpt": ("https://chatgpt.com", "web.chatgpt"),
+    "maps": ("https://maps.google.com", "web.maps"),
+    "wikipedia": ("https://www.wikipedia.org", "web.wikipedia"),
 }
 
 QUESTIONS = {
@@ -36,9 +50,9 @@ QUESTIONS = {
             "volume": "change system volume level up/down/mute/set",
             "display": "change screen brightness or switch dark/light theme",
             "media": "playback control only: play, pause, next, previous, stop — not opening apps",
-            "system": "lock, logout, shutdown, reboot, or sleep the computer",
+            "system": "explicitly lock, logout, shutdown, reboot, or sleep the computer",
             "timer": "set a timer or countdown alarm",
-            "none": "not a command — general conversation or question",
+            "none": "not a command — general conversation, conversational stop, or question",
         },
     },
     "app_action": {
@@ -111,9 +125,9 @@ QUESTIONS = {
         "criteria": {
             "lock": "lock the session",
             "logout": "log the user out",
-            "shutdown": "power off",
-            "reboot": "restart",
-            "sleep": "suspend",
+            "shutdown": "explicitly power off or shut down the computer",
+            "reboot": "explicitly reboot or restart the computer",
+            "sleep": "suspend or sleep the computer",
         },
         "depends_on": {"task": "system"},
     },
@@ -213,8 +227,136 @@ def _minutes_from(transcript: str) -> float | None:
     return None
 
 
+def fast_match_action(transcript: str) -> list[dict] | None:
+    """Zero-latency regex pattern matching for 50+ common commands."""
+    t = transcript.lower().strip()
+    if not t:
+        return None
+
+    # Safety check: Conversational words like "shut up", "stop", "exit" must NEVER shut down PC!
+    if re.fullmatch(r"(?:shut\s*up|stop|be\s+quiet|stop\s+talking|cancel|never\s*mind)", t):
+        return []  # Treat as conversational stop / none
+
+    # Web search on YouTube: e.g. "search youtube for lo fi music", "youtube search lofi"
+    m_yt_search = re.search(r"\b(?:search\s+youtube\s+for|search\s+on\s+youtube\s+for|youtube\s+search)\s+(.+)", t)
+    if m_yt_search:
+        return [{"action": "search", "engine": "youtube", "query": m_yt_search.group(1).strip()}]
+
+    # General web search: e.g. "search google for weather", "search for how to bake bread"
+    m_search = re.search(r"\b(?:search\s+google\s+for|search\s+for|google\s+search|search\s+the\s+web\s+for)\s+(.+)", t)
+    if m_search:
+        return [{"action": "search", "engine": "google", "query": m_search.group(1).strip()}]
+    m_wiki = re.search(r"\b(?:search\s+wikipedia\s+for|wikipedia\s+search)\s+(.+)", t)
+    if m_wiki:
+        return [{"action": "search", "engine": "wikipedia", "query": m_wiki.group(1).strip()}]
+
+    # URL / Web app destinations
+    m_open = re.search(r"\b(?:open|launch|go\s+to|start|visit)\s+(?:the\s+)?([a-z0-9_-]+)", t)
+    if m_open:
+        target = m_open.group(1)
+        if target in URLS:
+            url, rkey = URLS[target]
+            return [{"action": "url", "url": url, "reply_key": rkey}]
+        if target in APPS:
+            return [{"action": "app", "mode": "open", "app": APPS[target]}]
+
+    # Screenshot
+    if re.search(r"\b(?:take\s+(?:a\s+)?screenshot|capture\s+screen|screenshot)\b", t):
+        return [{"action": "screenshot"}]
+
+    # Current Time & Date
+    if re.search(r"\b(?:what\s+time\s+is\s+it|what['’]?s\s+the\s+time|current\s+time|tell\s+me\s+the\s+time)\b", t):
+        return [{"action": "time"}]
+    if re.search(r"\b(?:what\s+is\s+today['’]?s\s+date|what['’]?s\s+the\s+date|today['’]?s\s+date|today\s+date|what\s+day\s+is\s+it)\b", t):
+        return [{"action": "date"}]
+
+    # Media controls
+    if re.search(r"\b(?:pause(?:\s+music|\s+the\s+music)?|pause\s+playback)\b", t):
+        return [{"action": "media", "cmd": "pause"}]
+    if re.search(r"\b(?:resume|play(?:\s+music|\s+the\s+music)?|unpause)\b", t):
+        return [{"action": "media", "cmd": "play"}]
+    if re.search(r"\b(?:next\s+track|next\s+song|skip(?:\s+song)?)\b", t):
+        return [{"action": "media", "cmd": "next"}]
+    if re.search(r"\b(?:previous\s+track|previous\s+song|prev\s+song|go\s+back)\b", t):
+        return [{"action": "media", "cmd": "previous"}]
+    if re.search(r"\b(?:stop\s+music|stop\s+the\s+music|stop\s+playback|stop\s+song)\b", t):
+        return [{"action": "media", "cmd": "stop"}]
+
+    # Volume controls
+    if re.search(r"\b(?:volume\s+up|turn\s+it\s+up|louder|increase\s+volume)\b", t):
+        return [{"action": "volume_step", "step": 10}]
+    if re.search(r"\b(?:volume\s+down|turn\s+it\s+down|quieter|decrease\s+volume|lower\s+volume)\b", t):
+        return [{"action": "volume_step", "step": -10}]
+    if re.search(r"\b(?:mute|mute\s+(?:audio|sound|volume)|unmute)\b", t):
+        return [{"action": "volume_mute"}]
+    m_vol = re.search(r"\b(?:set\s+volume\s+to|volume)\s+(\d{1,3})(?:\s*%)?\b", t)
+    if m_vol:
+        pct = int(m_vol.group(1))
+        return [{"action": "volume_set", "pct": pct}]
+
+    # Display / Theme
+    if re.search(r"\b(?:dark\s+mode\s+on|switch\s+to\s+dark\s+mode|enable\s+dark\s+mode)\b", t):
+        return [{"action": "dark_mode", "on": True}]
+    if re.search(r"\b(?:dark\s+mode\s+off|light\s+mode|switch\s+to\s+light\s+mode|enable\s+light\s+mode)\b", t):
+        return [{"action": "dark_mode", "on": False}]
+    if re.search(r"\b(?:brightness\s+up|increase\s+brightness|screen\s+brighter)\b", t):
+        return [{"action": "brightness", "step": 10}]
+    if re.search(r"\b(?:brightness\s+down|decrease\s+brightness|screen\s+dimmer|dim\s+screen)\b", t):
+        return [{"action": "brightness", "step": -10}]
+
+    # System lock / sleep
+    if re.search(r"\b(?:lock\s+(?:the\s+)?computer|lock\s+screen|lock\s+session|lock\s+pc)\b", t):
+        return [{"action": "system", "cmd": "lock"}]
+    if re.search(r"\b(?:sleep\s+(?:the\s+)?computer|suspend\s+(?:pc|computer)|put\s+pc\s+to\s+sleep)\b", t):
+        return [{"action": "system", "cmd": "sleep"}]
+    if re.search(r"\b(?:log\s*out|sign\s*out)\b", t):
+        return [{"action": "system", "cmd": "logout"}]
+
+    # Explicit Shutdown / Reboot safety
+    if re.search(r"\bconfirm\s+(?:shut\s*down|power\s*off)\b", t):
+        return [{"action": "system", "cmd": "shutdown", "force": True}]
+    if re.search(r"\bconfirm\s+(?:reboot|restart)\b", t):
+        return [{"action": "system", "cmd": "reboot", "force": True}]
+    if re.search(r"\b(?:shut\s*down|power\s*off)\s+(?:the\s+)?(?:pc|computer|system)\b", t):
+        return [{"action": "system", "cmd": "shutdown", "force": False}]
+    if re.search(r"\b(?:reboot|restart)\s+(?:the\s+)?(?:pc|computer|system)\b", t):
+        return [{"action": "system", "cmd": "reboot", "force": False}]
+
+    # Timer direct parse
+    if re.search(r"\b(?:set\s+a\s+timer|set\s+timer|timer\s+for)\b", t):
+        mins = _minutes_from(t)
+        return [{"action": "timer", "minutes": mins or 5}]
+
+    return None
+
+
 def decide(router: Router, transcript: str, gate: float = GATE) -> dict:
-    """Run Laya → returns {answers, task, confidence, actions, needs_llm}."""
+    """Run fast match → then Laya if needed → returns {answers, task, confidence, actions, needs_llm}."""
+    fast_acts = fast_match_action(transcript)
+    if fast_acts is not None:
+        if not fast_acts:
+            return {
+                "answers": {},
+                "task": "none",
+                "confidence": 0.95,
+                "actions": [],
+                "needs_llm": True,
+            }
+        first_act = fast_acts[0].get("action", "")
+        task_map = {
+            "url": "app", "app": "app", "search": "app", "screenshot": "app",
+            "time": "app", "date": "app", "volume_step": "volume", "volume_set": "volume",
+            "volume_mute": "volume", "dark_mode": "display", "brightness": "display",
+            "media": "media", "system": "system", "timer": "timer",
+        }
+        return {
+            "answers": {},
+            "task": task_map.get(first_act, "app"),
+            "confidence": 0.99,
+            "actions": fast_acts,
+            "needs_llm": False,
+        }
+
     answers: dict = {}
     # Iteratively resolve: predict only unanswered active questions until stable
     for _ in range(4):
@@ -240,7 +382,7 @@ def decide(router: Router, transcript: str, gate: float = GATE) -> dict:
         answers.setdefault("app_target", {"choice": hint, "answer_confidence": 0.9})
         answers.setdefault("app_action", {"choice": "open", "answer_confidence": 0.9})
 
-    actions = split_actions(answers, task, conf, gate)
+    actions = split_actions(answers, task, conf, gate, transcript=transcript)
     # Laya's timer_minutes buckets often pick the wrong one — trust the transcript
     if actions and actions[0].get("action") == "timer":
         mins = _minutes_from(transcript)
@@ -277,7 +419,7 @@ def _extract_conf(answers: dict, key: str) -> float:
     return float(v)
 
 
-def split_actions(answers: dict, task: str, conf: float, gate: float) -> list[dict]:
+def split_actions(answers: dict, task: str, conf: float, gate: float, transcript: str = "") -> list[dict]:
     """Convert Laya answers → list of {action, ...} dicts for the dispatcher."""
     if conf < gate or task in ("none", None):
         return []
@@ -309,7 +451,14 @@ def split_actions(answers: dict, task: str, conf: float, gate: float) -> list[di
     if task == "media":
         return [{"action": "media", "cmd": ch("media_action") or "play"}]
     if task == "system":
-        return [{"action": "system", "cmd": ch("system_action") or "lock"}]
+        sys_cmd = ch("system_action") or "lock"
+        # Safety check: shutdown/reboot requires explicit words in transcript
+        t_low = transcript.lower()
+        if sys_cmd in ("shutdown", "reboot"):
+            if not any(w in t_low for w in ("shut down", "shutdown", "power off", "turn off the", "reboot", "restart")):
+                # Spurious match (e.g. from conversational stop/quit/exit)
+                return []
+        return [{"action": "system", "cmd": sys_cmd, "force": False}]
     if task == "timer":
         idx = _score_index(answers, "timer_minutes", default=2)
         minutes = TIMER_MIN[idx] if 0 <= idx < len(TIMER_MIN) else 5

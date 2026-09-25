@@ -1,9 +1,12 @@
 """Windows system actions — stubs for secondary target (win32 only)."""
 from __future__ import annotations
 
+import datetime
 import os
 import subprocess
 import sys
+import urllib.parse
+import webbrowser
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -18,9 +21,55 @@ def _run(cmd: list[str], timeout: float = 5.0) -> bool:
         return False
 
 
+def open_url(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        return webbrowser.open(url)
+    except Exception:
+        return False
+
+
+def search_web(query: str, engine: str = "google") -> bool:
+    q = urllib.parse.quote_plus(query.strip())
+    if engine == "youtube":
+        url = f"https://www.youtube.com/results?search_query={q}"
+    elif engine == "wikipedia":
+        url = f"https://en.wikipedia.org/wiki/Special:Search?search={q}"
+    else:
+        url = f"https://www.google.com/search?q={q}"
+    return open_url(url)
+
+
+def take_screenshot() -> bool:
+    # On Windows, win+prtscr or PIL/ImageGrab if available
+    try:
+        from PIL import ImageGrab
+        img = ImageGrab.grab()
+        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        out_dir = os.path.expanduser(r"~\Pictures\Screenshots")
+        os.makedirs(out_dir, exist_ok=True)
+        img.save(os.path.join(out_dir, f"screenshot_{ts}.png"))
+        return True
+    except Exception:
+        return False
+
+
+def get_current_time() -> str:
+    now = datetime.datetime.now()
+    return f"It's {now.strftime('%-I:%M %p')}."
+
+
+def get_current_date() -> str:
+    now = datetime.datetime.now()
+    return f"Today is {now.strftime('%A, %B %-d, %Y')}."
+
+
 def open_app(app: str) -> bool:
     if not IS_WIN or not app:
         return False
+    if app.startswith("http://") or app.startswith("https://"):
+        return open_url(app)
     # os.startfile opens files/URLs; for apps use shell start
     aliases = {
         "spotify": "spotify:",
@@ -31,6 +80,7 @@ def open_app(app: str) -> bool:
         "files": "explorer",
         "settings": "ms-settings:",
         "calculator": "calculator:",
+        "discord": "discord:",
     }
     target = aliases.get(app, app)
     try:
@@ -40,6 +90,7 @@ def open_app(app: str) -> bool:
         return _run(["cmd", "/c", "start", "", target])
     except Exception:
         return False
+
 
 
 def volume_step(step: int) -> bool:
@@ -151,7 +202,7 @@ def media(cmd: str) -> bool:
     return _run(["powershell", "-NoProfile", "-Command", script])
 
 
-def system(cmd: str) -> bool:
+def system(cmd: str, force: bool = False) -> bool:
     if not IS_WIN:
         return False
     if cmd == "lock":
@@ -159,8 +210,12 @@ def system(cmd: str) -> bool:
     if cmd == "logout":
         return _run(["shutdown", "/l"])
     if cmd == "shutdown":
+        if not force:
+            return False  # Protected: requires confirmation
         return _run(["shutdown", "/s", "/t", "0"])
     if cmd == "reboot":
+        if not force:
+            return False  # Protected: requires confirmation
         return _run(["shutdown", "/r", "/t", "0"])
     if cmd == "sleep":
         return _run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"])

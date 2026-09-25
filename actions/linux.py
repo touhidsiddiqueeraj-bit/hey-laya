@@ -1,8 +1,12 @@
-"""Linux system actions — playerctl / wpctl / gsettings / xdg-open."""
+"""Linux system actions — playerctl / wpctl / gsettings / xdg-open / browser / tools."""
 from __future__ import annotations
 
+import datetime
 import shutil
 import subprocess
+import urllib.parse
+import webbrowser
+from pathlib import Path
 
 
 def _run(cmd: list[str], timeout: float = 5.0) -> bool:
@@ -13,9 +17,71 @@ def _run(cmd: list[str], timeout: float = 5.0) -> bool:
         return False
 
 
+def open_url(url: str) -> bool:
+    """Open a web URL with default browser or xdg-open."""
+    if not url:
+        return False
+    try:
+        if webbrowser.open(url):
+            return True
+    except Exception:
+        pass
+    return _run(["xdg-open", url])
+
+
+def search_web(query: str, engine: str = "google") -> bool:
+    """Perform a web search in the browser."""
+    q = urllib.parse.quote_plus(query.strip())
+    if engine == "youtube":
+        url = f"https://www.youtube.com/results?search_query={q}"
+    elif engine == "wikipedia":
+        url = f"https://en.wikipedia.org/wiki/Special:Search?search={q}"
+    else:
+        url = f"https://www.google.com/search?q={q}"
+    return open_url(url)
+
+
+def take_screenshot() -> bool:
+    """Capture a screenshot to Pictures/Screenshots."""
+    out_dir = Path.home() / "Pictures" / "Screenshots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    out_file = out_dir / f"screenshot_{ts}.png"
+
+    # Spectacle (KDE Plasma)
+    if shutil.which("spectacle"):
+        if _run(["spectacle", "-b", "-n", "-o", str(out_file)]):
+            return True
+    # grim (generic Wayland)
+    if shutil.which("grim"):
+        if _run(["grim", str(out_file)]):
+            return True
+    # gnome-screenshot
+    if shutil.which("gnome-screenshot"):
+        if _run(["gnome-screenshot", "-f", str(out_file)]):
+            return True
+    # import (ImageMagick)
+    if shutil.which("import"):
+        if _run(["import", "-window", "root", str(out_file)]):
+            return True
+    return False
+
+
+def get_current_time() -> str:
+    now = datetime.datetime.now()
+    return f"It's {now.strftime('%-I:%M %p')}."
+
+
+def get_current_date() -> str:
+    now = datetime.datetime.now()
+    return f"Today is {now.strftime('%A, %B %-d, %Y')}."
+
+
 def open_app(app: str) -> bool:
     if not app:
         return False
+    if app.startswith("http://") or app.startswith("https://"):
+        return open_url(app)
     if app == "browser":
         return _open_browser()
     # Try desktop file / command name directly
@@ -24,9 +90,14 @@ def open_app(app: str) -> bool:
     # Common aliases
     aliases = {
         "google-chrome": ["google-chrome", "google-chrome-stable", "chromium"],
-        "org.gnome.Terminal": ["gnome-terminal", "kgx", "xterm"],
+        "org.gnome.Terminal": ["gnome-terminal", "konsole", "kgx", "alacritty", "kitty", "xterm"],
         "code": ["code", "code-oss"],
-        "nautilus": ["nautilus", "files"],
+        "nautilus": ["dolphin", "nautilus", "nemo", "thunar", "files"],
+        "calculator": ["kcalc", "gnome-calculator", "calculator"],
+        "settings": ["systemsettings", "gnome-control-center"],
+        "spotify": ["spotify"],
+        "slack": ["slack"],
+        "discord": ["discord", "web.discordapp.com"],
     }
     for name in aliases.get(app, [app]):
         if shutil.which(name):
@@ -53,7 +124,11 @@ def _open_browser() -> bool:
     for name in candidates:
         if shutil.which(name):
             return _run([name])
-    return False
+    try:
+        return webbrowser.open("about:blank")
+    except Exception:
+        return False
+
 
 
 def volume_step(step: int) -> bool:
@@ -163,7 +238,7 @@ def media(cmd: str) -> bool:
     return _run(["playerctl", mapping.get(cmd, "play")])
 
 
-def system(cmd: str) -> bool:
+def system(cmd: str, force: bool = False) -> bool:
     if cmd == "lock":
         for c in (
             ["loginctl", "lock-session"],
@@ -176,8 +251,12 @@ def system(cmd: str) -> bool:
     if cmd == "logout":
         return _run(["loginctl", "terminate-user", "self"])
     if cmd == "shutdown":
+        if not force:
+            return False  # Protected: must pass through confirmation
         return _run(["systemctl", "poweroff"])
     if cmd == "reboot":
+        if not force:
+            return False  # Protected: must pass through confirmation
         return _run(["systemctl", "reboot"])
     if cmd == "sleep":
         return _run(["systemctl", "suspend"])
